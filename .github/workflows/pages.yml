@@ -21,6 +21,22 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Restore private answer key for tests
+        env:
+          QUIZ_ANSWER_KEY_JSON: ${{ secrets.QUIZ_ANSWER_KEY_JSON }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const value = process.env.QUIZ_ANSWER_KEY_JSON;
+          if (!value) {
+            throw new Error('Missing QUIZ_ANSWER_KEY_JSON repository secret');
+          }
+
+          JSON.parse(value);
+          fs.mkdirSync('private', { recursive: true });
+          fs.writeFileSync('private/answer-key.json', value, { mode: 0o600 });
+          NODE
       - run: npm test
       - run: npm run build
         env:
