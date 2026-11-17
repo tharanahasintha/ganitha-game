@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function signed(){return request.auth != null;}
+  function teacher(){return signed() && exists(/databases/$(database)/documents/teachers/$(request.auth.uid)) && get(/databases/$(database)/documents/teachers/$(request.auth.uid)).data.enabled == true;}
+  match /teachers/{uid} {allow get: if signed() && request.auth.uid==uid; allow list,write: if false;}
+  match /sessions/{sid} {
+   function s(){return get(/databases/$(database)/documents/sessions/$(sid)).data;}
+   function joined(){return signed() && exists(/databases/$(database)/documents/sessions/$(sid)/participants/$(request.auth.uid));}
+   function end(){return s().startedAt + duration.value(1200,'s');}
+   function ended(){return s().status=='closed' || (s().status=='running' && request.time>=end());}
+   function active(){return s().status=='running' && request.time<end();}
+   allow get: if signed();
+   allow list: if teacher();
+   allow create: if teacher() && request.resource.data.keys().hasOnly(['owner','status','duration','createdAt','startedAt','closedAt','resultsPublished','answersReleased']) && request.resource.data.owner==request.auth.uid && request.resource.data.status=='waiting' && request.resource.data.duration==1200 && request.resource.data.createdAt==request.time && request.resource.data.startedAt==null && request.resource.data.closedAt==null && request.resource.data.resultsPublished==false && request.resource.data.answersReleased==false;
+   allow update: if teacher() && (
+    (resource.data.status=='waiting' && request.resource.data.status=='running' && request.resource.data.startedAt==request.time && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','startedAt'])) ||
+    (resource.data.status=='running' && request.resource.data.status=='closed' && request.resource.data.closedAt==request.time && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','closedAt'])) ||
+    (ended() && request.resource.data.resultsPublished==true && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['resultsPublished'])) ||
+    (ended() && resource.data.resultsPublished && request.resource.data.answersReleased==true && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answersReleased']))
+   );
+   allow delete: if false;
+   match /participants/{uid} {
+    allow get: if teacher() || (signed() && uid==request.auth.uid);
+    allow list: if teacher();
+    allow create: if signed() && uid==request.auth.uid && s().status=='waiting' && request.resource.data.keys().hasOnly(['name','joinedAt','excluded','reason','tieBreak','tieReason']) && request.resource.data.name is string && request.resource.data.name.size()>=2 && request.resource.data.name.size()<=50 && request.resource.data.name.matches('^\\S[\\s\\S]*\\S$') && request.resource.data.joinedAt==request.time && request.resource.data.excluded==false && request.resource.data.reason=='' && request.resource.data.tieBreak==0 && request.resource.data.tieReason=='';
+    allow update: if teacher() && ended() && !s().resultsPublished && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['excluded','reason','tieBreak','tieReason']) && request.resource.data.excluded is bool && request.resource.data.reason is string && request.resource.data.reason.size()<=500 && (!request.resource.data.excluded || request.resource.data.reason.size()>0) && request.resource.data.tieBreak is number && request.resource.data.tieBreak>=0 && request.resource.data.tieBreak<=1000 && request.resource.data.tieReason is string && request.resource.data.tieReason.size()<=500 && (request.resource.data.tieBreak==0 || request.resource.data.tieReason.size()>0);
+   }
+   match /questions/{qid} {
+    allow read: if teacher() || (joined() && s().status!='waiting');
+    allow create,update: if teacher() && getAfter(/databases/$(database)/documents/sessions/$(sid)).data.status=='waiting';
+   }
+   match /keys/{kid} {
+    allow read: if teacher() || (joined() && s().answersReleased && ended());
+    allow create,update: if teacher() && getAfter(/databases/$(database)/documents/sessions/$(sid)).data.status=='waiting';
+   }
+   match /answers/{uid} {
+    function ids(){return ['q1','q2','q3','q4','q5','q6','q7','q8','q9','q10','q11','q12','q13','q14','q15'];}
+    function choice(a,q){return !(q in a) || (a[q] is string && a[q] in ['','o0','o1','o2','o3']);}
+    function numeric(a,q){return !(q in a) || (a[q] is string && a[q].size()<=20 && (a[q]=='' || a[q].matches('^[+-]?[0-9]+([.][0-9]+)?$')));}
+    function answersValid(a){return a is map && a.keys().hasOnly(ids()) && choice(a,'q1') && choice(a,'q2') && choice(a,'q3') && numeric(a,'q4') && choice(a,'q5') && choice(a,'q6') && numeric(a,'q7') && numeric(a,'q8') && choice(a,'q9') && (!('q10' in a) || (a.q10 is string && (a.q10=='' || a.q10.matches('^[0-9]{3}$')))) && numeric(a,'q11') && choice(a,'q12') && numeric(a,'q13') && numeric(a,'q14') && choice(a,'q15');}
+    function mc(o,q){return o[q] is list && o[q].size()==4 && o[q].toSet()==['o0','o1','o2','o3'].toSet();}
+    function empty(o,q){return o[q] is list && o[q].size()==0;}
+    function orderValid(o){return o is map && o.keys().hasAll(ids()) && o.keys().hasOnly(ids()) && mc(o,'q1') && mc(o,'q2') && mc(o,'q3') && empty(o,'q4') && mc(o,'q5') && mc(o,'q6') && empty(o,'q7') && empty(o,'q8') && mc(o,'q9') && empty(o,'q10') && empty(o,'q11') && mc(o,'q12') && empty(o,'q13') && empty(o,'q14') && mc(o,'q15');}
+    allow get: if teacher() || (signed() && uid==request.auth.uid);
+    allow list: if teacher();
+    allow create: if signed() && uid==request.auth.uid && s().status=='waiting' && existsAfter(/databases/$(database)/documents/sessions/$(sid)/participants/$(uid)) && request.resource.data.keys().hasOnly(['answers','order','submittedAt','updatedAt']) && request.resource.data.answers=={} && orderValid(request.resource.data.order) && request.resource.data.submittedAt==null && request.resource.data.updatedAt==request.time;
+    allow update: if signed() && uid==request.auth.uid && joined() && active() && resource.data.submittedAt==null && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answers','updatedAt','submittedAt']) && answersValid(request.resource.data.answers) && request.resource.data.updatedAt==request.time && (request.resource.data.submittedAt==null || request.resource.data.submittedAt==request.time);
+   }
+   match /results/{uid} {
+    allow read: if teacher() || (joined() && s().resultsPublished && ended());
+    allow create,update: if teacher() && ended() && !s().resultsPublished && request.resource.data.keys().hasOnly(['uid','name','score','completedAt','tieBreak','reason','rank']) && request.resource.data.uid==uid && request.resource.data.name is string && request.resource.data.name.size()<=50 && request.resource.data.score is int && request.resource.data.score>=0 && request.resource.data.score<=300 && request.resource.data.rank is int && request.resource.data.rank>=1 && request.resource.data.completedAt is number && request.resource.data.tieBreak is number && request.resource.data.reason is string;
+   }
+  }
+ }
+}

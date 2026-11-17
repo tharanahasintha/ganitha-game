@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*-debug.log
+test-results/
+playwright-report/
+.env.local
+.env.*.local
+private/answer-key.json
